@@ -5,6 +5,7 @@ import { DatabaseConfig } from './database/database.config';
 import { QueueModule } from './queue/queue.module';
 import { AuthModule } from './auth/auth.module';
 import { StellarModule } from './stellar/stellar.module';
+import { ShipmentsModule } from './shipments/shipments.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { StellarModule } from './stellar/stellar.module';
     QueueModule,
     AuthModule,
     StellarModule,
+    ShipmentsModule,
   ],
 })
 export class AppModule {}

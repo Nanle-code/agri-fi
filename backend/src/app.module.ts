@@ -6,6 +6,7 @@ import { QueueModule } from './queue/queue.module';
 import { AuthModule } from './auth/auth.module';
 import { StellarModule } from './stellar/stellar.module';
 import { ShipmentsModule } from './shipments/shipments.module';
+import { TradeDealsModule } from './trade-deals/trade-deals.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { UsersModule } from './users/users.module';
     AuthModule,
     StellarModule,
     ShipmentsModule,
+    TradeDealsModule,
     UsersModule,
   ],
 })

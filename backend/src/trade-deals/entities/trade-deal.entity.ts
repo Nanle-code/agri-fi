@@ -1,16 +1,7 @@
-import {
-  Entity,
-  PrimaryGeneratedColumn,
-  Column,
-  CreateDateColumn,
-  ManyToOne,
-  OneToMany,
-} from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn, CreateDateColumn } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
-import { Document } from './document.entity';
-import { Investment } from '../../users/entities/investment.entity';
 
-export type DealStatus = 'draft' | 'open' | 'funded' | 'delivered' | 'completed' | 'failed';
+export type TradeDealStatus = 'draft' | 'open' | 'funded' | 'delivered' | 'completed' | 'failed';
 
 @Entity('trade_deals')
 export class TradeDeal {
@@ -20,13 +11,13 @@ export class TradeDeal {
   @Column()
   commodity: string;
 
-  @Column({ type: 'numeric' })
+  @Column({ type: 'numeric', precision: 10, scale: 2 })
   quantity: number;
 
   @Column({ name: 'quantity_unit', default: 'kg' })
   quantityUnit: string;
 
-  @Column({ name: 'total_value', type: 'numeric' })
+  @Column({ name: 'total_value', type: 'numeric', precision: 10, scale: 2 })
   totalValue: number;
 
   @Column({ name: 'token_count' })
@@ -39,45 +30,40 @@ export class TradeDeal {
     type: 'text',
     default: 'draft',
   })
-  status: DealStatus;
+  status: TradeDealStatus;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'farmer_id' })
+  farmer: User;
 
   @Column({ name: 'farmer_id' })
   farmerId: string;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'trader_id' })
+  trader: User;
 
   @Column({ name: 'trader_id' })
   traderId: string;
 
   @Column({ name: 'escrow_public_key', nullable: true })
-  escrowPublicKey: string | null;
+  escrowPublicKey: string;
 
   @Column({ name: 'escrow_secret_key', nullable: true })
-  escrowSecretKey: string | null;
+  escrowSecretKey: string;
 
   @Column({ name: 'issuer_public_key', nullable: true })
-  issuerPublicKey: string | null;
+  issuerPublicKey: string;
 
-  @Column({ name: 'total_invested', type: 'numeric', default: 0 })
+  @Column({ name: 'total_invested', type: 'numeric', precision: 10, scale: 2, default: 0 })
   totalInvested: number;
 
   @Column({ name: 'delivery_date', type: 'date' })
   deliveryDate: Date;
 
   @Column({ name: 'stellar_asset_tx_id', nullable: true })
-  stellarAssetTxId: string | null;
+  stellarAssetTxId: string;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
-
-  // Relations
-  @ManyToOne(() => User, { eager: false })
-  farmer: User;
-
-  @ManyToOne(() => User, { eager: false })
-  trader: User;
-
-  @OneToMany(() => Document, document => document.tradeDeal)
-  documents: Document[];
-
-  @OneToMany(() => Investment, investment => investment.tradeDeal)
-  investments: Investment[];
 }

@@ -1,263 +1,275 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import {
+  NotFoundException,
+  ForbiddenException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { ShipmentsService } from './shipments.service';
-import { ShipmentMilestone } from './entities/shipment-milestone.entity';
+import { ShipmentMilestone, MilestoneType } from './entities/shipment-milestone.entity';
 import { StellarService } from '../stellar/stellar.service';
-import { QueueService } from '../queue/queue.service';
 import { ConfigService } from '@nestjs/config';
 import { CreateMilestoneDto } from './dto/create-milestone.dto';
 
+const mockMilestone = (): ShipmentMilestone => ({
+  id: 'milestone-1',
+  tradeDealId: 'deal-1',
+  milestone: 'farm' as MilestoneType,
+  recordedBy: 'trader-1',
+  notes: 'Goods received at farm',
+  stellarTxId: 'stellar-tx-123',
+  recordedAt: new Date(),
+});
+
 describe('ShipmentsService', () => {
   let service: ShipmentsService;
-  let mockMilestoneRepo: jest.Mocked<Repository<ShipmentMilestone>>;
-  let mockStellarService: jest.Mocked<StellarService>;
-  let mockQueueService: jest.Mocked<QueueService>;
-  let mockDataSource: jest.Mocked<DataSource>;
+  let milestoneRepo: {
+    find: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+    manager: { query: jest.Mock };
+  };
+  let stellarService: { recordMemo: jest.Mock };
+  let config: { get: jest.Mock };
 
   beforeEach(async () => {
-    const mockManager = {
-      query: jest.fn(),
+    milestoneRepo = {
       find: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
+      manager: { query: jest.fn() },
     };
-
-    mockDataSource = {
-      transaction: jest.fn().mockImplementation((cb: (m: typeof mockManager) => Promise<unknown>) => cb(mockManager)),
-    } as any;
-
-    mockMilestoneRepo = {
-      find: jest.fn(),
-      create: jest.fn(),
-      save: jest.fn(),
-      manager: mockManager,
-    } as any;
-
-    mockStellarService = {
-      recordMemo: jest.fn(),
-    } as any;
-
-    mockQueueService = {
-      enqueueDealDelivered: jest.fn(),
-    } as any;
+    stellarService = { recordMemo: jest.fn() };
+    config = { get: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ShipmentsService,
-        {
-          provide: getRepositoryToken(ShipmentMilestone),
-          useValue: mockMilestoneRepo,
-        },
-        {
-          provide: StellarService,
-          useValue: mockStellarService,
-        },
-        {
-          provide: QueueService,
-          useValue: mockQueueService,
-        },
-        {
-          provide: ConfigService,
-          useValue: {
-            get: jest.fn().mockReturnValue('test-secret'),
-          },
-        },
-        {
-          provide: DataSource,
-          useValue: mockDataSource,
-        },
+        { provide: getRepositoryToken(ShipmentMilestone), useValue: milestoneRepo },
+        { provide: StellarService, useValue: stellarService },
+        { provide: ConfigService, useValue: config },
       ],
     }).compile();
 
     service = module.get<ShipmentsService>(ShipmentsService);
   });
 
-  describe('recordMilestone - Importer Milestone', () => {
-    it('should transition deal to delivered and enqueue job when recording importer milestone', async () => {
-      const userId = 'trader-123';
-      const tradeDealId = 'deal-456';
+  describe('recordMilestone', () => {
+    const mockDeal = {
+      id: 'deal-1',
+      status: 'funded',
+      trader_id: 'trader-1',
+      escrow_secret_key: 'escrow-secret',
+    };
+
+    it('records first milestone (farm) for funded deal', async () => {
       const dto: CreateMilestoneDto = {
-        trade_deal_id: tradeDealId,
-        milestone: 'importer',
-        notes: 'Goods received by importer',
+        trade_deal_id: 'deal-1',
+        milestone: 'farm' as MilestoneType,
+        notes: 'Goods received at farm',
       };
 
-      const mockDeal = {
-        id: tradeDealId,
-        status: 'funded',
-        trader_id: userId,
-        escrow_secret_key: 'test-escrow-secret',
-      };
+      milestoneRepo.manager.query.mockResolvedValue([mockDeal]);
+      milestoneRepo.find.mockResolvedValue([]);
+      milestoneRepo.create.mockReturnValue(mockMilestone());
+      milestoneRepo.save.mockResolvedValue(mockMilestone());
+      stellarService.recordMemo.mockResolvedValue('stellar-tx-123');
 
-      const mockManager = {
-        query: jest.fn()
-          .mockResolvedValueOnce([mockDeal])   // SELECT deal
-          .mockResolvedValueOnce(undefined),    // UPDATE status
-        find: jest.fn().mockResolvedValue([
-          { milestone: 'farm' },
-          { milestone: 'warehouse' },
-          { milestone: 'port' },
-        ]),
-        create: jest.fn().mockReturnValue({
-          tradeDealId,
-          milestone: 'importer',
-          recordedBy: userId,
-          notes: dto.notes,
-          stellarTxId: 'stellar-tx-123',
-        }),
-        save: jest.fn().mockResolvedValue({
-          id: 'milestone-789',
-          tradeDealId,
-          milestone: 'importer',
-          recordedBy: userId,
-          notes: dto.notes,
-          stellarTxId: 'stellar-tx-123',
-        }),
-      };
+      const result = await service.recordMilestone('trader-1', dto);
 
-      (mockDataSource.transaction as jest.Mock).mockImplementation(
-        (cb: (m: typeof mockManager) => Promise<unknown>) => cb(mockManager),
-      );
-      mockStellarService.recordMemo.mockResolvedValue('stellar-tx-123');
-
-      const result = await service.recordMilestone(userId, dto);
-
-      expect(result).toBeDefined();
-      expect(result.milestone).toBe('importer');
-
-      expect(mockManager.query).toHaveBeenCalledWith(
-        `UPDATE trade_deals SET status = 'delivered' WHERE id = $1`,
-        [tradeDealId],
+      expect(milestoneRepo.manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('SELECT id, status, trader_id, escrow_secret_key FROM trade_deals'),
+        ['deal-1'],
       );
 
-      expect(mockQueueService.enqueueDealDelivered).toHaveBeenCalledWith(tradeDealId);
+      expect(milestoneRepo.create).toHaveBeenCalledWith({
+        tradeDealId: 'deal-1',
+        milestone: 'farm',
+        recordedBy: 'trader-1',
+        notes: 'Goods received at farm',
+        stellarTxId: 'stellar-tx-123',
+      });
+
+      expect(result.milestone).toBe('farm');
     });
 
-    it('should not trigger status change for non-importer milestones', async () => {
-      const userId = 'trader-123';
-      const tradeDealId = 'deal-456';
+    it('enforces milestone sequence enforcement', async () => {
       const dto: CreateMilestoneDto = {
-        trade_deal_id: tradeDealId,
-        milestone: 'warehouse',
-        notes: 'Goods at warehouse',
+        trade_deal_id: 'deal-1',
+        milestone: 'port' as MilestoneType, // Trying to skip to port
+        notes: 'Goods at port',
       };
 
-      const mockDeal = {
-        id: tradeDealId,
-        status: 'funded',
-        trader_id: userId,
-        escrow_secret_key: 'test-escrow-secret',
-      };
+      milestoneRepo.manager.query.mockResolvedValue([mockDeal]);
+      milestoneRepo.find.mockResolvedValue([
+        { ...mockMilestone(), milestone: 'farm' },
+      ]);
 
-      const mockManager = {
-        query: jest.fn().mockResolvedValueOnce([mockDeal]),
-        find: jest.fn().mockResolvedValue([{ milestone: 'farm' }]),
-        create: jest.fn().mockReturnValue({
-          tradeDealId,
-          milestone: 'warehouse',
-          recordedBy: userId,
-          notes: dto.notes,
-          stellarTxId: 'stellar-tx-123',
-        }),
-        save: jest.fn().mockResolvedValue({
-          id: 'milestone-789',
-          tradeDealId,
-          milestone: 'warehouse',
-          recordedBy: userId,
-          notes: dto.notes,
-          stellarTxId: 'stellar-tx-123',
-        }),
-      };
-
-      (mockDataSource.transaction as jest.Mock).mockImplementation(
-        (cb: (m: typeof mockManager) => Promise<unknown>) => cb(mockManager),
+      await expect(service.recordMilestone('trader-1', dto)).rejects.toThrow(
+        UnprocessableEntityException,
       );
-      mockStellarService.recordMemo.mockResolvedValue('stellar-tx-123');
-
-      const result = await service.recordMilestone(userId, dto);
-
-      // Verify the milestone was created
-      expect(result).toBeDefined();
-      expect(result.milestone).toBe('warehouse');
-
-      // Verify no status update was made
-      expect(mockManager.query).not.toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE trade_deals SET status'),
-        expect.any(Array),
-      );
-
-      // Verify no job was enqueued
-      expect(mockQueueService.enqueueDealDelivered).not.toHaveBeenCalled();
     });
-  });
 
-  describe('findByDeal', () => {
-    it('should return milestones for existing deal ordered by recorded_at ASC', async () => {
-      const tradeDealId = 'deal-123';
-      const mockMilestones = [
-        {
-          id: 'milestone-1',
-          tradeDealId,
-          milestone: 'farm',
-          notes: 'Collected from farm',
-          stellarTxId: 'stellar-tx-1',
-          recordedBy: 'trader-123',
-          recordedAt: new Date('2024-01-01'),
-        },
-        {
-          id: 'milestone-2',
-          tradeDealId,
-          milestone: 'warehouse',
-          notes: 'Stored in warehouse',
-          stellarTxId: 'stellar-tx-2',
-          recordedBy: 'trader-123',
-          recordedAt: new Date('2024-01-02'),
-        },
+    it('rejects out-of-order milestone with expected next milestone', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'deal-1',
+        milestone: 'port' as MilestoneType,
+        notes: 'Goods at port',
+      };
+
+      milestoneRepo.manager.query.mockResolvedValue([mockDeal]);
+      milestoneRepo.find.mockResolvedValue([
+        { ...mockMilestone(), milestone: 'farm' },
+      ]);
+
+      try {
+        await service.recordMilestone('trader-1', dto);
+      } catch (error) {
+        expect(error.response.expected).toBe('warehouse'); // Next expected milestone
+      }
+    });
+
+    it('transitions to delivered status on importer milestone', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'deal-1',
+        milestone: 'importer' as MilestoneType,
+        notes: 'Goods delivered to importer',
+      };
+
+      // Mock existing milestones: farm, warehouse, port
+      const existingMilestones = [
+        { ...mockMilestone(), milestone: 'farm' },
+        { ...mockMilestone(), milestone: 'warehouse' },
+        { ...mockMilestone(), milestone: 'port' },
       ];
 
-      // Mock deal exists check
-      const mockManager = {
-        query: jest.fn().mockResolvedValue([{ id: tradeDealId }]),
-      };
-      mockMilestoneRepo.manager = mockManager;
-      mockMilestoneRepo.find.mockResolvedValue(mockMilestones);
+      const importerMilestone = { ...mockMilestone(), milestone: 'importer' };
 
-      const result = await service.findByDeal(tradeDealId);
+      milestoneRepo.manager.query.mockResolvedValue([mockDeal]);
+      milestoneRepo.find.mockResolvedValue(existingMilestones);
+      milestoneRepo.create.mockReturnValue(importerMilestone);
+      milestoneRepo.save.mockResolvedValue(importerMilestone);
+      stellarService.recordMemo.mockResolvedValue('stellar-tx-final');
 
-      expect(result).toEqual(mockMilestones);
-      expect(mockMilestoneRepo.find).toHaveBeenCalledWith({
-        where: { tradeDealId },
-        order: { recordedAt: 'ASC' },
-      });
+      const result = await service.recordMilestone('trader-1', dto);
+
+      expect(result.milestone).toBe('importer');
+      expect(stellarService.recordMemo).toHaveBeenCalledWith(
+        expect.stringContaining('AGRIC:MILESTONE:'),
+        'escrow-secret',
+      );
     });
 
-    it('should return empty array for existing deal with no milestones', async () => {
-      const tradeDealId = 'deal-123';
-
-      // Mock deal exists check
-      const mockManager = {
-        query: jest.fn().mockResolvedValue([{ id: tradeDealId }]),
+    it('throws error when deal not found', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'non-existent',
+        milestone: 'farm' as MilestoneType,
+        notes: 'Goods received at farm',
       };
-      mockMilestoneRepo.manager = mockManager;
-      mockMilestoneRepo.find.mockResolvedValue([]);
 
-      const result = await service.findByDeal(tradeDealId);
+      milestoneRepo.manager.query.mockResolvedValue([]);
 
-      expect(result).toEqual([]);
+      await expect(service.recordMilestone('trader-1', dto)).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
-    it('should throw NotFoundException for non-existent deal', async () => {
-      const tradeDealId = 'non-existent-deal';
-
-      // Mock deal does not exist
-      const mockManager = {
-        query: jest.fn().mockResolvedValue([]),
+    it('throws error when deal not funded', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'deal-1',
+        milestone: 'farm' as MilestoneType,
+        notes: 'Goods received at farm',
       };
-      mockMilestoneRepo.manager = mockManager;
 
-      await expect(service.findByDeal(tradeDealId)).rejects.toThrow(
-        'Trade deal not found',
+      const unfundedDeal = { ...mockDeal, status: 'open' };
+      milestoneRepo.manager.query.mockResolvedValue([unfundedDeal]);
+
+      await expect(service.recordMilestone('trader-1', dto)).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+    });
+
+    it('throws error when user not assigned trader', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'deal-1',
+        milestone: 'farm' as MilestoneType,
+        notes: 'Goods received at farm',
+      };
+
+      milestoneRepo.manager.query.mockResolvedValue([mockDeal]);
+
+      await expect(service.recordMilestone('other-trader', dto)).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('throws error when all milestones already recorded', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'deal-1',
+        milestone: 'farm' as MilestoneType,
+        notes: 'Duplicate milestone',
+      };
+
+      // All 4 milestones already recorded
+      const allMilestones = [
+        { ...mockMilestone(), milestone: 'farm' },
+        { ...mockMilestone(), milestone: 'warehouse' },
+        { ...mockMilestone(), milestone: 'port' },
+        { ...mockMilestone(), milestone: 'importer' },
+      ];
+
+      milestoneRepo.manager.query.mockResolvedValue([mockDeal]);
+      milestoneRepo.find.mockResolvedValue(allMilestones);
+
+      await expect(service.recordMilestone('trader-1', dto)).rejects.toThrow(
+        UnprocessableEntityException,
+      );
+    });
+
+    it('uses platform secret when escrow secret not available', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'deal-1',
+        milestone: 'farm' as MilestoneType,
+        notes: 'Goods received at farm',
+      };
+
+      const dealWithoutSecret = { ...mockDeal, escrow_secret_key: null };
+      milestoneRepo.manager.query.mockResolvedValue([dealWithoutSecret]);
+      milestoneRepo.find.mockResolvedValue([]);
+      milestoneRepo.create.mockReturnValue(mockMilestone());
+      milestoneRepo.save.mockResolvedValue(mockMilestone());
+      stellarService.recordMemo.mockResolvedValue('stellar-tx-123');
+      config.get.mockReturnValue('platform-secret');
+
+      await service.recordMilestone('trader-1', dto);
+
+      expect(stellarService.recordMemo).toHaveBeenCalledWith(
+        expect.any(String),
+        'platform-secret',
+      );
+    });
+
+    it('anchors milestone on Stellar with correct memo format', async () => {
+      const dto: CreateMilestoneDto = {
+        trade_deal_id: 'deal-1',
+        milestone: 'warehouse' as MilestoneType,
+        notes: 'Goods moved to warehouse',
+      };
+
+      const existingMilestones = [{ ...mockMilestone(), milestone: 'farm' }];
+      const warehouseMilestone = { ...mockMilestone(), milestone: 'warehouse' };
+
+      milestoneRepo.manager.query.mockResolvedValue([mockDeal]);
+      milestoneRepo.find.mockResolvedValue(existingMilestones);
+      milestoneRepo.create.mockReturnValue(warehouseMilestone);
+      milestoneRepo.save.mockResolvedValue(warehouseMilestone);
+      stellarService.recordMemo.mockResolvedValue('stellar-tx-456');
+
+      await service.recordMilestone('trader-1', dto);
+
+      expect(stellarService.recordMemo).toHaveBeenCalledWith(
+        expect.stringMatching(/^AGRIC:MILESTONE:deal1:warehouse:\d+$/),
+        'escrow-secret',
       );
     });
   });

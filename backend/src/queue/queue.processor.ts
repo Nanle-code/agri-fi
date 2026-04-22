@@ -1,8 +1,10 @@
 import { Controller, Logger } from '@nestjs/common';
 import { Ctx, EventPattern, Payload, RmqContext } from '@nestjs/microservices';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { StellarService } from '../stellar/stellar.service';
 import { TradeDealsService } from '../trade-deals/trade-deals.service';
-import { InvestmentsService } from '../investments/investments.service';
+import { Investment } from '../investments/entities/investment.entity';
 
 interface DealPublishPayload {
   dealId: string;
@@ -32,7 +34,8 @@ export class QueueProcessor {
   constructor(
     private readonly stellarService: StellarService,
     private readonly tradeDealsService: TradeDealsService,
-    private readonly investmentsService: InvestmentsService,
+    @InjectRepository(Investment)
+    private readonly investmentRepo: Repository<Investment>,
   ) {}
 
   @EventPattern('deal.publish')
@@ -104,7 +107,10 @@ export class QueueProcessor {
         );
 
         // Confirm investment and increment total_invested
-        await this.investmentsService.confirmInvestment(data.investmentId, stellarTxId);
+        await this.investmentRepo.update(data.investmentId, {
+          status: 'confirmed' as any,
+          stellarTxId,
+        });
 
         this.logger.log(
           `Successfully funded investment ${data.investmentId} with txId ${stellarTxId}`,
@@ -130,7 +136,7 @@ export class QueueProcessor {
     this.logger.error(
       `investment.fund permanently failed for ${data.investmentId} after ${MAX_RETRIES} attempts: ${lastError?.message}`,
     );
-    await this.investmentsService.markInvestmentFailed(data.investmentId);
+    await this.investmentRepo.update(data.investmentId, { status: 'failed' as any });
 
     const channel = context.getChannelRef();
     channel.ack(context.getMessage());

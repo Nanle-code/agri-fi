@@ -1,15 +1,11 @@
-import { Module, Global } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ClientsModule, Transport } from '@nestjs/microservices';
 import { QueueService } from './queue.service';
-import { QueueProcessor } from './queue.processor';
-import { TradeDealsModule } from '../trade-deals/trade-deals.module';
-import { StellarModule } from '../stellar/stellar.module';
-import { InvestmentsModule } from '../investments/investments.module';
+import { QUEUE_SERVICE } from './queue.constants';
 
-export const QUEUE_SERVICE = 'QUEUE_SERVICE';
+export { QUEUE_SERVICE } from './queue.constants';
 
-@Global()
 @Module({
   imports: [
     ClientsModule.registerAsync([
@@ -27,11 +23,8 @@ export const QUEUE_SERVICE = 'QUEUE_SERVICE';
         inject: [ConfigService],
       },
     ]),
-    TradeDealsModule,
-    StellarModule,
-    InvestmentsModule,
   ],
-  providers: [QueueService, QueueProcessor],
+  providers: [QueueService],
   exports: [QueueService, ClientsModule],
 })
 export class QueueModule {}

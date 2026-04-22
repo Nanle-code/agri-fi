@@ -11,12 +11,7 @@ import { QueueModule } from '../queue/queue.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      PaymentDistribution,
-      TradeDeal,
-      Investment,
-      User,
-    ]),
+    TypeOrmModule.forFeature([PaymentDistribution, TradeDeal, Investment, User]),
     StellarModule,
     QueueModule,
   ],

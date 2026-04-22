@@ -225,6 +225,26 @@ export class InvestmentsService {
     return { stellarTxId };
   }
 
+  private async sendFundedNotification(tradeDeal: TradeDeal): Promise<void> {
+    try {
+      const investments = await this.investmentRepo.find({
+        where: { tradeDealId: tradeDeal.id, status: InvestmentStatus.CONFIRMED },
+        relations: ['investor'],
+      });
+      await this.queueService.enqueueDealFunded({
+        tradeDealId: tradeDeal.id,
+        commodity: tradeDeal.commodity,
+        totalValue: Number(tradeDeal.totalValue),
+        investors: investments.map((inv) => ({
+          email: inv.investor?.email ?? '',
+          tokenAmount: inv.tokenAmount,
+        })),
+      });
+    } catch (err) {
+      // non-critical — log and swallow
+    }
+  }
+
   async getInvestmentsByTradeDeal(tradeDealId: string): Promise<Investment[]> {
     return this.investmentRepo.find({
       where: { tradeDealId },

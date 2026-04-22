@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { QUEUE_SERVICE } from './queue.module';
+import { QUEUE_SERVICE } from './queue.constants';
 
 @Injectable()
 export class QueueService {
@@ -39,6 +39,9 @@ export class QueueService {
     amountUsd: number;
   }): Promise<void> {
     await this.emit('investment.fund', payload);
+  }
+
+  /**
    * Enqueue a deal.funded notification job to email all participating investors
    */
   async enqueueDealFunded(payload: {

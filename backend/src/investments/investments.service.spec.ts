@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import {
   NotFoundException,
   UnprocessableEntityException,
@@ -82,6 +83,25 @@ describe('InvestmentsService', () => {
         { provide: getRepositoryToken(TradeDeal), useValue: tradeDealRepo },
         { provide: StellarService, useValue: stellarService },
         { provide: QueueService, useValue: queueService },
+        {
+          provide: DataSource,
+          useValue: {
+            transaction: jest.fn((cb) =>
+              cb({
+                update: jest.fn((entity, criteria, values) => {
+                  // Route calls through the existing repo mocks so tests can assert on them
+                  if (entity === Investment) {
+                    return investmentRepo.update(criteria, values);
+                  }
+                  return tradeDealRepo.update(criteria, values);
+                }),
+                find: jest.fn((entity, opts) => investmentRepo.find(opts)),
+                create: jest.fn(),
+                save: jest.fn(),
+              }),
+            ),
+          },
+        },
       ],
     }).compile();
 
@@ -190,7 +210,7 @@ describe('InvestmentsService', () => {
         status: InvestmentStatus.CONFIRMED,
       });
       investmentRepo.find.mockResolvedValue([investment]);
-      tradeDealRepo.update.mockResolvedValue({});
+      tradeDealRepo.update.mockResolvedValue({ affected: 1 });
 
       await service.confirmInvestment('inv-1', 'stellar-tx-123');
 
@@ -219,16 +239,17 @@ describe('InvestmentsService', () => {
         status: InvestmentStatus.CONFIRMED,
       });
       investmentRepo.find.mockResolvedValue([investment]);
-      tradeDealRepo.update.mockResolvedValue({});
+      tradeDealRepo.update.mockResolvedValue({ affected: 1 });
 
       await service.confirmInvestment('inv-1', 'stellar-tx-123');
 
       expect(tradeDealRepo.update).toHaveBeenCalledWith('deal-1', {
         totalInvested: 1000,
       });
-      expect(tradeDealRepo.update).toHaveBeenCalledWith('deal-1', {
-        status: 'funded',
-      });
+      expect(tradeDealRepo.update).toHaveBeenCalledWith(
+        { id: 'deal-1', status: 'open' },
+        { status: 'funded' },
+      );
     });
 
     it('throws error for non-pending investments', async () => {
@@ -259,7 +280,7 @@ describe('InvestmentsService', () => {
         status: InvestmentStatus.CONFIRMED,
       });
       investmentRepo.find.mockResolvedValue([investment]);
-      tradeDealRepo.update.mockResolvedValue({});
+      tradeDealRepo.update.mockResolvedValue({ affected: 1 });
       stellarService.fundEscrow.mockResolvedValue('stellar-tx-456');
 
       const result = await service.fundEscrow(
